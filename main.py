@@ -67,7 +67,8 @@ async def auth_login(username: str = Form(...),
 
 @app.post("/instagram/publish")
 async def upload_media(file: UploadFile = File(...),
-                       sessionid: str = Form(...), 
+                       sessionid: str = Form(...),
+                       caption: str = Form(...),
                        clients: ClientStorage = Depends(get_clients)):
     
     cl = clients.get(sessionid)
@@ -80,7 +81,7 @@ async def upload_media(file: UploadFile = File(...),
     with open(f"./images/uploaded.jpg", "wb") as f:
         f.write(contents)
 
-    media = cl.photo_upload("./images/uploaded.jpg", "description", 
+    media = cl.photo_upload("./images/uploaded.jpg", caption, 
     extra_data={
         "custom_accessibility_caption": "alt text example",
         "like_and_view_counts_disabled": 1,
