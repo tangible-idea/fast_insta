@@ -2,11 +2,16 @@ from fastapi_poe.types import ProtocolMessage
 from fastapi_poe.client import get_bot_response
 from fastapi.responses import JSONResponse
 from fastapi.requests import Request
+from fastapi import FastAPI, File, UploadFile, Depends, Form
+
+from typing import Optional, Dict
+
 import asyncio
-from fastapi import FastAPI, File, UploadFile
+
 import uvicorn
 from instagrapi import Client
 import uuid
+from dependencies import ClientStorage, get_clients
 
 app = FastAPI()
 concated= ""
@@ -23,26 +28,59 @@ class Item(BaseModel):
     apikey: str
     request: str
 
-class InstaInfo(BaseModel):
-    account: str
-    password: str
-    description: str
-    file: UploadFile = File(...)
+# class InstaInfo(BaseModel):
+#     account: str
+#     password: str
+#     description: str
+#     file: UploadFile = File(...)
 
+
+@app.post("/instagram/login")
+async def auth_login(username: str = Form(...),
+                     password: str = Form(...),
+                     verification_code: Optional[str] = Form(""),
+                     proxy: Optional[str] = Form(""),
+                     locale: Optional[str] = Form(""),
+                     timezone: Optional[str] = Form(""),
+                     clients: ClientStorage = Depends(get_clients)) -> str:
+    """Login by username and password with 2FA
+    """
+    cl = clients.client()
+    if proxy != "":
+        cl.set_proxy(proxy)
+
+    if locale != "":
+        cl.set_locale(locale)
+
+    if timezone != "":
+        cl.set_timezone_offset(timezone)
+
+    result = cl.login(
+        username,
+        password,
+        verification_code=verification_code
+    )
+    if result:
+        clients.set(cl)
+        return cl.sessionid
+    return result
 
 @app.post("/instagram/publish")
-async def upload_media(item: InstaInfo):
-    cl = Client()
-    cl.login(item.account, item.password)
+async def upload_media(file: UploadFile = File(...),
+                       sessionid: str = Form(...), 
+                       clients: ClientStorage = Depends(get_clients)):
+    
+    cl = clients.get(sessionid)
+    #cl.login(item.account, item.password)
 
-    item.file.filename = f"uploaded.jpg"
-    contents = await item.file.read()
+    file.filename = f"uploaded.jpg"
+    contents = await file.read()
 
     # save the file
     with open(f"./images/uploaded.jpg", "wb") as f:
         f.write(contents)
 
-    media = cl.photo_upload("./images/uploaded.jpg", item.description, 
+    media = cl.photo_upload("./images/uploaded.jpg", "description", 
     extra_data={
         "custom_accessibility_caption": "alt text example",
         "like_and_view_counts_disabled": 1,
@@ -115,5 +153,5 @@ async def concat_message(apikey, request, botname):
         concated = concated + partial.text
 
 if __name__ == "__main__":
-   uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+   uvicorn.run(app, host="0.0.0.0", port=8000)
    #test_endpoint()
