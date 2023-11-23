@@ -1,39 +1,37 @@
 from fastapi_poe.types import ProtocolMessage
 from fastapi_poe.client import get_bot_response
 from fastapi.responses import JSONResponse
-from fastapi.requests import Request
-from fastapi import FastAPI, File, UploadFile, Depends, Form
-
-from typing import Optional, Dict
-
-import asyncio
-
+from fastapi.exceptions import HTTPException
+from fastapi import FastAPI, APIRouter, File, UploadFile, Depends, Form, status
+from typing import Optional, Generator
 import uvicorn
-from instagrapi import Client
-import uuid
-from dependencies import ClientStorage, get_clients
+import requests
+import tempfile
+from clientstorage import get_clients, ClientStorage
+
 
 app = FastAPI()
 concated= ""
-
 # router = APIRouter()
 # router.add_api_route('/api/v2/hello-world', 
 # endpoint = HelloWorld().read_hello, methods=["GET"])
 # app.include_router(router)
 
-from pydantic import BaseModel
+from pydantic import BaseModel, AnyHttpUrl
 
+@app.get('/health')
+def health():
+    print('health endpoint')
+    return "200"
 
 class Item(BaseModel):
     apikey: str
     request: str
 
-# class InstaInfo(BaseModel):
-#     account: str
-#     password: str
-#     description: str
-#     file: UploadFile = File(...)
-
+async def photo_upload_post(cl, content : bytes, **kwargs):
+    with tempfile.NamedTemporaryFile(suffix='.jpg') as fp:
+        fp.write(content)
+        return cl.photo_upload(fp.name, **kwargs)
 
 @app.post("/instagram/login")
 async def auth_login(username: str = Form(...),
@@ -65,44 +63,53 @@ async def auth_login(username: str = Form(...),
         return cl.sessionid
     return result
 
+
+
+@app.post("/upload/by_url")
+async def photo_upload(sessionid: str = Form(...),
+                       url: AnyHttpUrl = Form(...),
+                       caption: str = Form(...),
+                       clients: ClientStorage = Depends(get_clients)
+                       ) -> str:
+    """Upload photo and configure to feed
+    """
+    cl = clients.get(sessionid)
+    
+    content = requests.get(url).content
+    await photo_upload_post(
+        cl, content,
+        caption=caption)
+    return "success"
+
+
+
 @app.post("/instagram/publish")
-async def upload_media(file: UploadFile = File(...),
+async def upload_media(image: UploadFile = File(...),
                        sessionid: str = Form(...),
                        caption: str = Form(...),
                        clients: ClientStorage = Depends(get_clients)):
     
     cl = clients.get(sessionid)
     #cl.login(item.account, item.password)
+    contents = await image.read()
 
-    file.filename = f"uploaded.jpg"
-    contents = await file.read()
+    try:
+        await photo_upload_post(cl, contents, caption=caption)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail='There was an error uploading the file')
+    finally:
+        await image.close()
 
-    # save the file
-    with open(f"./images/uploaded.jpg", "wb") as f:
-        f.write(contents)
+    # media = cl.photo_upload(imagepath, caption, 
+    # extra_data={
+    #     "custom_accessibility_caption": "alt text example",
+    #     "like_and_view_counts_disabled": 1,
+    #     "disable_comments": 1,
+    # })
 
-    media = cl.photo_upload("./images/uploaded.jpg", caption, 
-    extra_data={
-        "custom_accessibility_caption": "alt text example",
-        "like_and_view_counts_disabled": 1,
-        "disable_comments": 1,
-    })
-    
-    return JSONResponse(content=media.pk, status_code=201)
+    return JSONResponse(content="success", status_code=201)
 
-
-@app.get("/instagram/publish_test")
-async def upload_media():
-    cl = Client()
-    cl.login("daily.good.q", "i@264381")
-    media = cl.photo_upload("./images/tree.jpg", "Test caption for photo with #hashtags and mention users such", 
-    extra_data={
-        "custom_accessibility_caption": "alt text example",
-        "like_and_view_counts_disabled": 1,
-        "disable_comments": 1,
-    })
-    
-    return JSONResponse(content=media.pk, status_code=201)
 
 @app.post("/liama")
 async def call_liama(item: Item):
@@ -154,5 +161,5 @@ async def concat_message(apikey, request, botname):
         concated = concated + partial.text
 
 if __name__ == "__main__":
-   uvicorn.run(app, host="0.0.0.0", port=8000)
+   uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
    #test_endpoint()
